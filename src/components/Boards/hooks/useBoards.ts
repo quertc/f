@@ -3,72 +3,38 @@ import { request, gql } from 'graphql-request';
 import { readContracts } from 'wagmi';
 import { AbiFunction } from 'abitype';
 import RewardTokenABI from '../../../abis/RewardToken.json';
-import Game2048ABI from '../../../abis/Game2048.json';
+
+const { VITE_REWARD_ADDRESS, VITE_ENDPOINT_URL } = import.meta.env;
 
 interface BoardEntry {
   boardId: number;
   score: number;
-  maxTile: bigint;
+  maxTile: number;
   availableForClaim: bigint;
 }
 
-interface BoardIdsResponse {
+interface BoardIdsQueryResponse {
   createBoards: Array<{ boardId: number }>;
 }
 
-interface HighScoreResponse {
-  highScores: Array<{ score: number, boardId: number }>;
-}
-
-interface BoardResponse {
-  maxTile: bigint;
+interface MovesQueryResponse {
+  moves: Array<{ maxTile: number, totalScore: number, boardId: number }>;
 }
 
 export default function useBoards() {
   const [boards, setBoards] = useState<BoardEntry[]>([]);
   const [loading, setLoading] = useState(false);
 
-  function isBoardInfo(data: unknown): data is BoardResponse {
-    const record = data as BoardResponse;
-    return typeof record.maxTile === 'bigint';
-  }
-
   const getLastClaimedScore = useCallback(async (boardIds: number[]) => {
-    const contractCalls = boardIds.flatMap(boardId => [
-      {
-        address: import.meta.env.VITE_REWARD_ADDRESS as `0x${string}`,
-        abi: RewardTokenABI as AbiFunction[],
-        functionName: 'getLastClaimedScore',
-        args: [boardId],
-      },
-      {
-        address: import.meta.env.VITE_GAME48_ADDRESS as `0x${string}`,
-        abi: Game2048ABI as AbiFunction[],
-        functionName: 'getBoard',
-        args: [boardId],
-      },
-    ]);
+    const contractCalls = boardIds.map(boardId => ({
+      address: VITE_REWARD_ADDRESS,
+      abi: RewardTokenABI as AbiFunction[],
+      functionName: 'getLastClaimedScore',
+      args: [boardId],
+    }));
 
     const data = await readContracts({ contracts: contractCalls });
-    const boardDataMap = new Map<number, { maxTile: bigint, lastClaimedScore: bigint }>();
-
-    data.forEach((response, index) => {
-      if (index % 2 === 0) {
-        const boardId = boardIds[Math.floor(index / 2)];
-        const lastClaimedScore = typeof response.result === 'bigint' ? response.result : 0n;
-        const boardInfo = data[index + 1];
-
-        let maxTile = 0n;
-
-        if (boardInfo.status === 'success' && isBoardInfo(boardInfo.result)) {
-          maxTile = boardInfo.result.maxTile;
-        }
-
-        boardDataMap.set(boardId, { maxTile, lastClaimedScore });
-      }
-    });
-
-    return boardDataMap;
+    return new Map(data.map((response, index) => [boardIds[index], response.result as bigint || 0n]));
   }, []);
 
   const fetchBoardIds = useCallback(async (address: string) => {
@@ -79,52 +45,44 @@ export default function useBoards() {
         }
       }`;
 
-    const response: BoardIdsResponse = await request(import.meta.env.VITE_ENDPOINT_URL as string, BOARD_IDS_QUERY, { address });
-    return response.createBoards.map(board => board.boardId);
+    const { createBoards } = await request<BoardIdsQueryResponse>(VITE_ENDPOINT_URL, BOARD_IDS_QUERY, { address });
+    return createBoards.map(board => board.boardId);
   }, []);
 
-  const fetchHighScore = useCallback(async (boardId: number) => {
-    const HIGH_SCORE_QUERY = gql`
-      query HighScore($boardId: BigInt!) {
-        highScores(where: { boardId: $boardId }, orderBy: score, orderDirection: desc, first: 1) {
-          score
+  const fetchBoard = useCallback(async (boardId: number) => {
+    const MOVES_QUERY = gql`
+      query Moves($boardId: BigInt!) {
+        moves(where: { boardId: $boardId }, first: 1, orderBy: totalScore, orderDirection: desc) {
+          maxTile
+          totalScore
           boardId
         }
       }`;
 
-    const response: HighScoreResponse = await request(import.meta.env.VITE_ENDPOINT_URL as string, HIGH_SCORE_QUERY, { boardId });
-
-    if (response.highScores.length === 0) {
-      return null;
-    }
-
-    return response.highScores[0];
+    const { moves } = await request<MovesQueryResponse>(VITE_ENDPOINT_URL, MOVES_QUERY, { boardId });
+    return moves.length > 0 ? moves[0] : null;
   }, []);
 
   const fetchBoards = useCallback(async (address: string) => {
     try {
       setLoading(true);
       const boardIds = await fetchBoardIds(address);
-
-      const highScoresPromises = boardIds.map(boardId => fetchHighScore(boardId));
+      const highScoresPromises = boardIds.map(boardId => fetchBoard(boardId));
       const highScores = await Promise.all(highScoresPromises);
-
       const lastClaimedScoresResponses = await getLastClaimedScore(boardIds);
 
-      const updatedBoards = highScores.reduce<BoardEntry[]>((boardsAcc, highScore) => {
-        if (highScore) {
-          const boardData = lastClaimedScoresResponses.get(highScore.boardId);
-          const lastClaimedScore = boardData?.lastClaimedScore ?? 0n;
-          const maxTile = boardData?.maxTile ?? 0n;
-
-          boardsAcc.push({
-            boardId: highScore.boardId,
-            score: Number(highScore.score),
-            maxTile,
-            availableForClaim: BigInt(highScore.score) - lastClaimedScore,
+      const updatedBoards = highScores.reduce<BoardEntry[]>((boardsCollection, move) => {
+        if (move && move.totalScore > 0) {
+          const lastClaimedScore = lastClaimedScoresResponses.get(move.boardId) ?? 0n;
+          boardsCollection.push({
+            boardId: move.boardId,
+            score: move.totalScore,
+            maxTile: move.maxTile,
+            availableForClaim: BigInt(move.totalScore) - lastClaimedScore,
           });
         }
-        return boardsAcc;
+
+        return boardsCollection;
       }, []);
 
       setBoards(updatedBoards);
@@ -133,7 +91,7 @@ export default function useBoards() {
       console.error('Error fetching boards:', error);
       setLoading(false);
     }
-  }, [fetchBoardIds, fetchHighScore, getLastClaimedScore]);
+  }, [fetchBoardIds, fetchBoard, getLastClaimedScore]);
 
   return { boards, fetchBoards, loading };
 }

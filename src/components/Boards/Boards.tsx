@@ -19,7 +19,7 @@ export default function Boards() {
   }
 
   if (address && isConnected) {
-    if (boards.length > 0 || !loading) {
+    if (boards.length > 0 && !loading) {
       return (
         <Stack>
           {boards.map(({ boardId, score, maxTile, availableForClaim }) => (

@@ -93,6 +93,11 @@ export default function useBoards() {
       }`;
 
     const response: HighScoreResponse = await request(import.meta.env.VITE_ENDPOINT_URL as string, HIGH_SCORE_QUERY, { boardId });
+
+    if (response.highScores.length === 0) {
+      return null;
+    }
+
     return response.highScores[0];
   }, []);
 
@@ -106,18 +111,21 @@ export default function useBoards() {
 
       const lastClaimedScoresResponses = await getLastClaimedScore(boardIds);
 
-      const updatedBoards = highScores.map(highScore => {
-        const boardData = lastClaimedScoresResponses.get(highScore.boardId);
-        const lastClaimedScore = boardData?.lastClaimedScore ?? 0n;
-        const maxTile = boardData?.maxTile ?? 0n;
+      const updatedBoards = highScores.reduce<BoardEntry[]>((boardsAcc, highScore) => {
+        if (highScore) {
+          const boardData = lastClaimedScoresResponses.get(highScore.boardId);
+          const lastClaimedScore = boardData?.lastClaimedScore ?? 0n;
+          const maxTile = boardData?.maxTile ?? 0n;
 
-        return {
-          boardId: highScore.boardId,
-          score: Number(highScore.score),
-          maxTile,
-          availableForClaim: BigInt(highScore.score) - lastClaimedScore,
-        };
-      });
+          boardsAcc.push({
+            boardId: highScore.boardId,
+            score: Number(highScore.score),
+            maxTile,
+            availableForClaim: BigInt(highScore.score) - lastClaimedScore,
+          });
+        }
+        return boardsAcc;
+      }, []);
 
       setBoards(updatedBoards);
       setLoading(false);

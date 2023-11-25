@@ -1,0 +1,15 @@
+body {
+  background: linear-gradient(90deg, rgb(249,237,234) 3%, rgb(255,238,238) 66%, rgb(252, 247, 224) 96%);
+}
+
+body::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-image: url("assets/bg.png");
+  opacity: 0.7;
+  z-index: -1;
+}
